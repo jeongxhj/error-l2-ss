@@ -1,8 +1,8 @@
-m: 3.39
-lf: 0.168
-lr: 0.167
-wheelbase: 0.335
-width_m: 0.228
+m: 3.446         # 측정하여 변경   
+lf: 0.1625       # wheelbase / 2
+lr: 0.1625       # wheelbase / 2
+wheelbase: 0.325 # 가로크기 측정
+width_m: 0.265   # 앞바퀴 축부터 뒷바퀴 축까지 측정
 
 Iz: 0.0627
 h_cg: 0.074
