@@ -1,0 +1,3 @@
+# f1tenth_gym parameters the car configs do not have, the rest comes from <car>/car_model.yaml and <car>/pacejka/<floor>
+v_switch: 7.319 # Switching velocity (velocity at which the acceleration is no longer able to create wheel spin)
+length: 0.58 # length of the vehicle in meters

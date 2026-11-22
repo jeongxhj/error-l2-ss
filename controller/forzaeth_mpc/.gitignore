@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+# acados codegen + solver artifacts
+c_generated_code/
+acados_ocp*.json
+acados_sim*.json
+*.so
+# learnt GP models / logs
+*.pt
+*.csv
+residual_lbmpc_*_solver_config.json
+lbmpc_*_solver_config.json
+residual_plots/

@@ -1,0 +1,20 @@
+{
+  "created_wall": 1768749290.9431376,
+  "nx": 8,
+  "nu": 2,
+  "N": 40,
+  "state_names": [
+    "pos_on_center_line_s",
+    "min_dist_to_center_line_n",
+    "orientation_theta",
+    "velocity_v_x",
+    "velocity_v_y",
+    "yaw_rate",
+    "steering_angle_delta",
+    "accel"
+  ],
+  "input_names": [
+    "d_steering_angle",
+    "jerk"
+  ]
+}

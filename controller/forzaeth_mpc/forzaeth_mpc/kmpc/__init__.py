@@ -1,0 +1,1 @@
+from forzaeth_mpc.kmpc.controller import Kinematic_MPC_Controller

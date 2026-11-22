@@ -1,0 +1,4 @@
+[submodule "external/l4acados"]
+	path = external/l4acados
+	url = https://github.com/eghignone/l4acados.git
+	branch = fix/balanced-dictionary-gate

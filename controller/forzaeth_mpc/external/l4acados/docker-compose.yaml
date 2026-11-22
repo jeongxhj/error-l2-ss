@@ -1,0 +1,13 @@
+name: "l4acados_dev"
+services:
+  l4acados_dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: l4acados_dev
+    volumes:
+      - /etc/passwd:/etc/passwd:ro
+      - /etc/group:/etc/group:ro
+    environment:
+      ACADOS_SOURCE_DIR: "/opt/acados"
+      LD_LIBRARY_PATH: "/opt/acados/lib"

@@ -1,0 +1,195 @@
+# MIT License
+
+# Copyright (c) 2020 Hongrui Zheng
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+from launch import LaunchDescription
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from launch.substitutions import Command, LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessStart
+import launch.logging
+from ament_index_python.packages import get_package_share_directory
+import os
+import tempfile
+import yaml
+
+
+def car_sim_params(racecar_version, floor):
+    """Path of the f1tenth_gym parameters of a car, from its car_model and Pacejka tires."""
+    config_dir = os.path.join(get_package_share_directory('stack_master'), 'config')
+    car_path = os.path.join(config_dir, racecar_version, 'car_model.yaml')
+    tires_path = os.path.join(config_dir, racecar_version, 'pacejka', floor, 'default.yaml')
+    sim_params_path = os.path.join(config_dir, 'SIM', 'sim_params.yaml')
+    if not (os.path.isfile(car_path) and os.path.isfile(tires_path)):
+        if racecar_version == 'SIM':
+            # SIM car without car_model / Pacejka tires: its sim_params are complete on their own
+            return sim_params_path
+        launch.logging.get_logger('launch.user').warning(
+            f"{racecar_version} has no {car_path} or {tires_path}, simulating the SIM car instead")
+        return car_sim_params('SIM', 'dubi')
+
+    params = yaml.safe_load(open(sim_params_path, 'r'))  # what the car configs do not have (v_switch, length)
+    car = yaml.safe_load(open(car_path, 'r'))
+    tires = yaml.safe_load(open(tires_path, 'r'))
+    params.update({
+        'mu': tires['friction_coeff'],
+        **{key: tires[key] for key in ('Bf', 'Cf', 'Df', 'Ef', 'Br', 'Cr', 'Dr', 'Er')},
+        'lf': car['lf'],
+        'lr': car['lr'],
+        'h': car['h_cg'],
+        'm': car['m'],
+        'I': car['Iz'],
+        's_min': -car['max_steering_angle'],
+        's_max': car['max_steering_angle'],
+        'sv_min': -car['max_steering_velocity'],
+        'sv_max': car['max_steering_velocity'],
+        'a_max': car['a_max'],
+        'v_min': car['v_min'],
+        'v_max': car['v_max'],
+        'width': car['width_m'],
+    })
+    with tempfile.NamedTemporaryFile('w', prefix=f'sim_params_{racecar_version}_', suffix='.yaml', delete=False) as f:
+        yaml.safe_dump(params, f)
+    return f.name
+
+
+def generate_launch_description():
+    ld = LaunchDescription()
+
+    map_yaml_path = LaunchConfiguration('map_yaml_path')
+    map_yaml_path_arg = DeclareLaunchArgument(
+        'map_yaml_path', description="Path to map YAML file. Passed in via top-level launchfile.")
+    racecar_version_arg = DeclareLaunchArgument(
+        'racecar_version', default_value='SIM', description="Car whose dynamics are simulated: 'SIM' / 'NUCx'")
+    floor_arg = DeclareLaunchArgument(
+        'floor', default_value='dubi', description="Floor of the car tires")
+    rviz = LaunchConfiguration('rviz')
+    rviz_arg = DeclareLaunchArgument(
+        'rviz', default_value='true', description="RViz")
+    sim_overrides_arg = DeclareLaunchArgument(
+        'sim_overrides', default_value='',
+        description="Optional YAML (bridge: ros__parameters: ...) applied on top of stack_master/config/SIM/sim.yaml")
+
+    sim_setup_params = os.path.join(
+        get_package_share_directory('stack_master'),
+        'config',
+        'SIM',
+        'sim.yaml')
+
+    def bridge_setup(context):
+        # the overrides are only known at launch time, and num_agent decides whether the opp model is published
+        overrides = LaunchConfiguration('sim_overrides').perform(context)
+        params = yaml.safe_load(open(sim_setup_params, 'r'))['bridge']['ros__parameters']
+        param_files = [sim_setup_params]
+        if overrides:
+            params.update(yaml.safe_load(open(overrides, 'r'))['bridge']['ros__parameters'])
+            param_files.append(overrides)
+        bridge_node = Node(
+            package='f1tenth_gym_ros',
+            executable='gym_bridge',
+            name='bridge',
+            parameters=param_files + [
+                {'map_path': map_yaml_path},
+                {'sim_params': car_sim_params(LaunchConfiguration('racecar_version').perform(context),
+                                              LaunchConfiguration('floor').perform(context))}]
+        )
+        return [bridge_node, opp_robot_publisher] if params['num_agent'] > 1 else [bridge_node]
+
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz',
+        condition=IfCondition(rviz),
+        arguments=[
+            '-d', os.path.join(get_package_share_directory('stack_master'), 'config', 'SIM', 'sim.rviz'),
+            '--ros-args', '--log-level', 'warn']
+    )
+    rviz_glsl_note = RegisterEventHandler(OnProcessStart(
+        target_action=rviz_node,
+        on_start=[OpaqueFunction(function=lambda context: launch.logging.get_logger('launch.user').warning(
+            "\033[33mrviz2 may log a GLSL error for indexed_8bit_image ('active samplers with a different "
+            "type refer to the same texture image unit'). This is a known, unsolved rviz2 bug and "
+            "is harmless. See https://github.com/ros2/rviz/issues/463\033[0m"))]))
+    map_server_node = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        output='screen',
+        arguments=['--ros-args', '--log-level', 'warn'],
+        parameters=[{'yaml_filename': map_yaml_path},
+                    {'topic': 'map'},
+                    {'frame_id': 'map'},
+                    {'use_sim_time': True}]
+    )
+    nav_lifecycle_node = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_localization',
+        output='screen',
+        arguments=['--ros-args', '--log-level', 'warn'],
+        parameters=[{'use_sim_time': True},
+                    {'autostart': True},
+                    {'node_names': ['map_server']}]
+    )
+    ego_robot_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='ego_robot_state_publisher',
+        arguments=['--ros-args', '--log-level', 'warn'], # Log only errors and warning
+        parameters=[{'robot_description': ParameterValue(Command(['xacro ', os.path.join(
+            get_package_share_directory('f1tenth_gym_ros'), 'config', 'ego_racecar.xacro')]), value_type=str)}],
+        remappings=[('/robot_description', 'ego_robot_description')]
+    )
+    opp_robot_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='opp_robot_state_publisher',
+        arguments=['--ros-args', '--log-level', 'warn'], # Log only errors and warning
+        parameters=[{'robot_description': ParameterValue(Command(['xacro ', os.path.join(
+            get_package_share_directory('f1tenth_gym_ros'), 'config', 'opp_racecar.xacro')]), value_type=str)}],
+        remappings=[('/robot_description', 'opp_robot_description')]
+    )
+
+    map_to_odom_broadcaster = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='map_to_odom_broadcaster',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+    )
+
+    # TODO: add IMU
+
+    # finalize
+    ld.add_action(map_yaml_path_arg)
+    ld.add_action(racecar_version_arg)
+    ld.add_action(floor_arg)
+    ld.add_action(rviz_arg)
+    ld.add_action(sim_overrides_arg)
+    ld.add_action(rviz_node)
+    ld.add_action(rviz_glsl_note)
+    ld.add_action(OpaqueFunction(function=bridge_setup))
+    ld.add_action(nav_lifecycle_node)
+    ld.add_action(map_server_node)
+    ld.add_action(map_to_odom_broadcaster)
+    ld.add_action(ego_robot_publisher)
+
+    return ld
